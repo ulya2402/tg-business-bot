@@ -1,0 +1,10 @@
+{
+    "welcome": "Selamat datang di Business AI Bot. Saya dapat mengelola akun Telegram Bisnis Anda dan membalas pelanggan menggunakan Groq AI.",
+    "choose_lang": "Silakan pilih bahasa yang Anda inginkan:",
+    "lang_updated": "Bahasa telah diubah ke Bahasa Indonesia.",
+    "setup_groq": "Silakan kirim API Key Groq Anda untuk mulai menggunakan fitur AI. Key Anda akan dienkripsi dan disimpan dengan aman.",
+    "groq_success": "API Key Groq Anda telah berhasil disimpan dan dienkripsi.",
+    "invalid_key": "API Key yang Anda berikan tidak valid. Silakan coba lagi.",
+    "business_only": "Fitur ini hanya tersedia untuk pengguna Telegram Premium dengan fitur Bisnis aktif.",
+    "error_generic": "Terjadi kesalahan. Silakan coba lagi nanti."
+}

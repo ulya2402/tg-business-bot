@@ -1,0 +1,10 @@
+{
+    "welcome": "Welcome to Business AI Bot. I can manage your Telegram Business account and reply to customers using Groq AI.",
+    "choose_lang": "Please choose your preferred language:",
+    "lang_updated": "Language has been updated to English.",
+    "setup_groq": "Please send your Groq API Key to start using the AI features. Your key will be encrypted and stored securely.",
+    "groq_success": "Your Groq API Key has been saved and encrypted successfully.",
+    "invalid_key": "The API key you provided is invalid. Please try again.",
+    "business_only": "This feature is only available for Telegram Premium users with Business features enabled.",
+    "error_generic": "An error occurred. Please try again later."
+}
