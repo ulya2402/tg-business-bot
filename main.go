@@ -63,5 +63,6 @@ func getUpdates(token string, offset int64) ([]api.Update, error) {
 		Result []api.Update `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil { return nil, err }
+
 	return result.Result, nil
 }

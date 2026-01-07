@@ -59,85 +59,82 @@ func (h *BotHandler) refreshDashboard(chatID int64, user *models.User, status st
 }
 
 func (h *BotHandler) handlePrivateMessage(msg *api.Message) {
-	user, _ := h.DB.GetUser(msg.From.ID)
-	if user == nil {
-		h.DB.UpsertUser(models.User{TelegramID: msg.From.ID, Language: "en", AIModel: "openai/gpt-oss-120b", SystemPrompt: "You are a professional assistant.", IsPremium: msg.From.IsPremium})
-		user, _ = h.DB.GetUser(msg.From.ID)
-	}
+    user, _ := h.DB.GetUser(msg.From.ID)
+    if user == nil {
+        h.DB.UpsertUser(models.User{TelegramID: msg.From.ID, Language: "en", AIModel: "openai/gpt-oss-120b", SystemPrompt: "You are a professional assistant.", IsPremium: msg.From.IsPremium})
+        user, _ = h.DB.GetUser(msg.From.ID)
+    }
 
-	if !msg.From.IsPremium {
-		h.TG.SendMessage(msg.Chat.ID, h.I18n.Get("en", "access_denied"), "", nil)
-		return
-	}
+    if !msg.From.IsPremium {
+        h.TG.SendMessage(msg.Chat.ID, h.I18n.Get("en", "access_denied"), "", nil)
+        return
+    }
 
-	lang := user.Language
+    lang := user.Language
 
-	if msg.Text == "/start" {
-		markup := map[string]interface{}{
-			"inline_keyboard": [][]map[string]interface{}{
-				{{"text": h.I18n.Get(lang, "btn_set_key"), "callback_data": "menu_key"}},
-				{{"text": h.I18n.Get(lang, "btn_dashboard"), "callback_data": "back_main"}},
-			},
-		}
-		h.TG.SendMessage(msg.Chat.ID, h.I18n.Get(lang, "welcome"), "", markup)
-		return
-	}
+    // 1. Handle Commands
+    if msg.Text == "/start" {
+        markup := map[string]interface{}{
+            "inline_keyboard": [][]map[string]interface{}{
+                {{"text": h.I18n.Get(lang, "btn_set_key"), "callback_data": "menu_key"}},
+                {{"text": h.I18n.Get(lang, "btn_dashboard"), "callback_data": "back_main"}},
+            },
+        }
+        h.TG.SendMessage(msg.Chat.ID, h.I18n.Get(lang, "welcome"), "", markup)
+        return
+    }
 
-	if msg.Text == "/settings" {
-		if user.LastDashboardID != 0 {
-			h.TG.DeleteMessage(msg.Chat.ID, user.LastDashboardID)
-		}
-		msgID, _ := h.TG.SendMessage(msg.Chat.ID, h.getDashboardText(user, ""), "", h.getDashboardMarkup(user))
-		user.LastDashboardID = msgID
-		h.DB.UpsertUser(*user)
-		return
-	}
+    if msg.Text == "/settings" {
+        if user.LastDashboardID != 0 {
+            h.TG.DeleteMessage(msg.Chat.ID, user.LastDashboardID)
+        }
+        msgID, _ := h.TG.SendMessage(msg.Chat.ID, h.getDashboardText(user, ""), "", h.getDashboardMarkup(user))
+        user.LastDashboardID = msgID
+        h.DB.UpsertUser(*user)
+        return
+    }
 
-	if strings.HasPrefix(user.BusinessLocation, "WAIT_FOR_LOCATION:") {
-		h.TG.DeleteMessage(msg.Chat.ID, msg.MessageID)
-		
-		if msg.Location != nil {
-			// Simpan Koordinat Asli
-			user.Latitude = msg.Location.Latitude
-			user.Longitude = msg.Location.Longitude
-			user.BusinessLocation = fmt.Sprintf("https://www.google.com/maps?q=%f,%f", msg.Location.Latitude, msg.Location.Longitude)
-			
-			h.DB.UpsertUser(*user)
-			h.refreshDashboard(msg.Chat.ID, user, h.I18n.Get(user.Language, "location_success"))
-			return
-		}
+    // 2. Handle State Inputs (Logic Input User)
+    
+    // Logic input Lokasi
+    if strings.HasPrefix(user.BusinessLocation, "WAIT_FOR_LOCATION:") {
+        h.TG.DeleteMessage(msg.Chat.ID, msg.MessageID)
+        if msg.Location != nil {
+            user.Latitude = msg.Location.Latitude
+            user.Longitude = msg.Location.Longitude
+            user.BusinessLocation = fmt.Sprintf("https://www.google.com/maps?q=%f,%f", msg.Location.Latitude, msg.Location.Longitude)
+            h.DB.UpsertUser(*user)
+            h.refreshDashboard(msg.Chat.ID, user, h.I18n.Get(user.Language, "location_success"))
+        }
+        return
+    }
 
-	// Logic input System Prompt
-	if strings.HasPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:") {
-		user.SystemPrompt = msg.Text
-		h.DB.UpsertUser(*user)
-		h.TG.DeleteMessage(msg.Chat.ID, msg.MessageID)
-		h.refreshDashboard(msg.Chat.ID, user, "✅ <b>Prompt Updated!</b>")
-		return
-	}
+    // Logic input System Prompt - SEKARANG BERDIRI SENDIRI
+    if strings.HasPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:") {
+        user.SystemPrompt = msg.Text
+        h.DB.UpsertUser(*user)
+        h.TG.DeleteMessage(msg.Chat.ID, msg.MessageID)
+        h.refreshDashboard(msg.Chat.ID, user, "✅ <b>Prompt Updated!</b>")
+        return
+    }
 
-	// Logic input Groq Key
-	if strings.HasPrefix(user.EncryptedGroqKey, "WAIT_FOR_KEY:") {
-		h.TG.DeleteMessage(msg.Chat.ID, msg.MessageID)
-		
-		if !strings.HasPrefix(msg.Text, "gsk_") {
-			user.EncryptedGroqKey = "" // Reset state
-			h.DB.UpsertUser(*user)
-			h.refreshDashboard(msg.Chat.ID, user, h.I18n.Get(lang, "key_invalid"))
-			return
-		}
-
-		enc, _ := encryption.Encrypt(msg.Text, h.EncryptKey)
-		user.EncryptedGroqKey = enc
-		h.DB.UpsertUser(*user)
-		h.refreshDashboard(msg.Chat.ID, user, h.I18n.Get(lang, "key_success"))
-		return
-	}
+    // Logic input Groq Key - SEKARANG BERDIRI SENDIRI
+    if strings.HasPrefix(user.EncryptedGroqKey, "WAIT_FOR_KEY:") {
+        h.TG.DeleteMessage(msg.Chat.ID, msg.MessageID)
+        if !strings.HasPrefix(msg.Text, "gsk_") {
+            user.EncryptedGroqKey = "" // Reset state
+            h.DB.UpsertUser(*user)
+            h.refreshDashboard(msg.Chat.ID, user, h.I18n.Get(lang, "key_invalid"))
+            return
+        }
+        enc, _ := encryption.Encrypt(msg.Text, h.EncryptKey)
+        user.EncryptedGroqKey = enc
+        h.DB.UpsertUser(*user)
+        h.refreshDashboard(msg.Chat.ID, user, h.I18n.Get(lang, "key_success"))
+        return
+    }
 }
-}
 
-// --- UPDATED FUNCTION ---
-// --- UPDATED FUNCTION ---
 func (h *BotHandler) handleBusinessMessage(msg *api.Message) {
 	owner, _ := h.DB.GetUserByBusinessConnID(msg.BusinessConnectionID)
 	// Guard clause: pastikan owner valid dan tidak sedang input key/prompt
