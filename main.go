@@ -18,12 +18,18 @@ func main() {
 	db := database.NewSupabaseClient(cfg.SupabaseURL, cfg.SupabaseServiceKey)
 	tg := api.NewTelegramClient(cfg.BotToken)
 	
+	// Inisialisasi Bundle Bahasa
 	bundle := i18n.NewBundle()
+	
+	// MEMUAT SEMUA BAHASA (Pastikan file .json ada di folder locales/)
 	if err := bundle.LoadLocale("en", "locales/en.json"); err != nil {
-		log.Fatalf("Failed to load English locale: %v", err)
+		log.Printf("Warning: Failed to load English: %v", err)
 	}
 	if err := bundle.LoadLocale("id", "locales/id.json"); err != nil {
-		log.Fatalf("Failed to load Indonesian locale: %v", err)
+		log.Printf("Warning: Failed to load Indonesian: %v", err)
+	}
+	if err := bundle.LoadLocale("ru", "locales/ru.json"); err != nil {
+		log.Printf("Warning: Failed to load Russian: %v", err)
 	}
 
 	handler := handlers.NewBotHandler(db, tg, bundle, cfg.EncryptionKey)
@@ -49,19 +55,13 @@ func main() {
 func getUpdates(token string, offset int64) ([]api.Update, error) {
 	apiUrl := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=30", token, offset)
 	resp, err := http.Get(apiUrl)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	defer resp.Body.Close()
 
 	var result struct {
 		OK     bool         `json:"ok"`
 		Result []api.Update `json:"result"`
 	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil { return nil, err }
 	return result.Result, nil
 }

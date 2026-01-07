@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"tg-business-bot/internal/models"
 )
@@ -26,16 +25,12 @@ func (s *SupabaseClient) GetUser(telegramID int64) (*models.User, error) {
 	req.Header.Set("Authorization", "Bearer "+s.Key)
 	client := &http.Client{}
 	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	defer resp.Body.Close()
 	var users []models.User
 	body, _ := io.ReadAll(resp.Body)
 	json.Unmarshal(body, &users)
-	if len(users) == 0 {
-		return nil, nil
-	}
+	if len(users) == 0 { return nil, nil }
 	return &users[0], nil
 }
 
@@ -46,16 +41,12 @@ func (s *SupabaseClient) GetUserByBusinessConnID(connID string) (*models.User, e
 	req.Header.Set("Authorization", "Bearer "+s.Key)
 	client := &http.Client{}
 	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	defer resp.Body.Close()
 	var users []models.User
 	body, _ := io.ReadAll(resp.Body)
 	json.Unmarshal(body, &users)
-	if len(users) == 0 {
-		return nil, nil
-	}
+	if len(users) == 0 { return nil, nil }
 	return &users[0], nil
 }
 
@@ -69,9 +60,7 @@ func (s *SupabaseClient) UpsertUser(user models.User) error {
 	req.Header.Set("Prefer", "resolution=merge-duplicates,return=minimal")
 	client := &http.Client{}
 	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	defer resp.Body.Close()
 	return nil
 }
@@ -86,11 +75,7 @@ func (s *SupabaseClient) SaveMessage(ownerID, customerID int64, customerName, ro
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{}
 	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("DB Error: %v", err)
-		return
-	}
-	defer resp.Body.Close()
+	if err == nil { defer resp.Body.Close() }
 }
 
 func (s *SupabaseClient) GetChatHistory(ownerID, customerID int64) []models.ChatMessage {
@@ -100,17 +85,13 @@ func (s *SupabaseClient) GetChatHistory(ownerID, customerID int64) []models.Chat
 	req.Header.Set("Authorization", "Bearer "+s.Key)
 	client := &http.Client{}
 	resp, err := client.Do(req)
-	if err != nil {
-		return nil
-	}
+	if err != nil { return nil }
 	defer resp.Body.Close()
 	var rawMsgs []models.ChatMessage
 	body, _ := io.ReadAll(resp.Body)
 	json.Unmarshal(body, &rawMsgs)
 	var history []models.ChatMessage
-	for i := len(rawMsgs) - 1; i >= 0; i-- {
-		history = append(history, rawMsgs[i])
-	}
+	for i := len(rawMsgs) - 1; i >= 0; i-- { history = append(history, rawMsgs[i]) }
 	return history
 }
 
@@ -121,21 +102,37 @@ func (s *SupabaseClient) GetBusinessCustomers(ownerID int64) []map[string]interf
 	req.Header.Set("Authorization", "Bearer "+s.Key)
 	client := &http.Client{}
 	resp, err := client.Do(req)
-	if err != nil {
-		return nil
-	}
+	if err != nil { return nil }
 	defer resp.Body.Close()
+
 	var results []map[string]interface{}
 	body, _ := io.ReadAll(resp.Body)
 	json.Unmarshal(body, &results)
-	keys := make(map[int64]bool)
-	var list []map[string]interface{}
+	
+	uniqueCustomers := make(map[int64]string)
 	for _, entry := range results {
-		cid := int64(entry["customer_id"].(float64))
-		if _, value := keys[cid]; !value {
-			keys[cid] = true
-			list = append(list, entry)
+		var cid int64
+		// Handle conversion dari float64 (default JSON number) ke int64
+		if v, ok := entry["customer_id"].(float64); ok {
+			cid = int64(v)
+		} else if v, ok := entry["customer_id"].(int64); ok {
+			cid = v
 		}
+
+		name, _ := entry["customer_name"].(string)
+		if cid != 0 {
+			// Prioritaskan nama yang bukan "Unknown" atau kosong
+			if name != "" && name != "Unknown" {
+				uniqueCustomers[cid] = name
+			} else if _, exists := uniqueCustomers[cid]; !exists {
+				uniqueCustomers[cid] = fmt.Sprintf("User %d", cid)
+			}
+		}
+	}
+
+	var list []map[string]interface{}
+	for id, name := range uniqueCustomers {
+		list = append(list, map[string]interface{}{"customer_id": id, "customer_name": name})
 	}
 	return list
 }
@@ -146,10 +143,6 @@ func (s *SupabaseClient) ClearHistoryPerUser(ownerID, customerID int64) {
 	req.Header.Set("apikey", s.Key)
 	req.Header.Set("Authorization", "Bearer "+s.Key)
 	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("DB Error: %v", err)
-		return
-	}
-	defer resp.Body.Close()
+	resp, _ := client.Do(req)
+	if resp != nil { defer resp.Body.Close() }
 }

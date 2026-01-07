@@ -38,7 +38,9 @@ func (b *Bundle) Get(lang string, key string) string {
 	}
 	
 	if messages, ok := b.locales["en"]; ok {
-		return messages[key]
+		if val, ok := messages[key]; ok {
+			return val
+		}
 	}
 	
 	return key

@@ -10,6 +10,11 @@ import (
 	"tg-business-bot/internal/models"
 )
 
+const MasterHTMLPrompt = `You are a professional assistant for a Telegram Business account. 
+CRITICAL RULE: You MUST use Telegram-compatible HTML for formatting.
+Supported tags: <b>bold</b>, <i>italic</i>, <u>underline</u>, <s>strikethrough</s>, <code>code</code>, <pre>preformatted</pre>, <a href="URL">link</a>.
+Do NOT use Markdown. Ensure all tags are properly closed. For new lines, just use a normal line break.`
+
 type BotHandler struct {
 	DB         *database.SupabaseClient
 	TG         *api.TelegramClient
@@ -34,69 +39,120 @@ func (h *BotHandler) HandleUpdate(update api.Update) {
 		h.handlePrivateMessage(update.Message)
 		return
 	}
-	if update.BusinessConnection != nil {
-		h.handleBusinessConnection(update.BusinessConnection)
-		return
+}
+
+// --- FUNGSI BARU: refreshDashboard ---
+// Fungsi ini memastikan dashboard selalu diperbarui pada pesan yang tepat.
+func (h *BotHandler) refreshDashboard(chatID int64, user *models.User, status string) {
+	text := h.getDashboardText(user, status)
+	markup := h.getDashboardMarkup(user)
+
+	if user.LastDashboardID != 0 {
+		h.TG.EditMessage(chatID, user.LastDashboardID, text, markup)
+	} else {
+		// Fallback jika ID hilang, kirim pesan baru
+		msgID, _ := h.TG.SendMessage(chatID, text, "", markup)
+		user.LastDashboardID = msgID
+		h.DB.UpsertUser(*user)
 	}
 }
 
 func (h *BotHandler) handlePrivateMessage(msg *api.Message) {
 	user, _ := h.DB.GetUser(msg.From.ID)
 	if user == nil {
-		h.DB.UpsertUser(models.User{TelegramID: msg.From.ID, Language: "en", AIModel: "openai/gpt-oss-120b", SystemPrompt: "You are a professional assistant."})
+		h.DB.UpsertUser(models.User{TelegramID: msg.From.ID, Language: "en", AIModel: "openai/gpt-oss-120b", SystemPrompt: "You are a professional assistant.", IsPremium: msg.From.IsPremium})
 		user, _ = h.DB.GetUser(msg.From.ID)
 	}
 
+	if !msg.From.IsPremium {
+		h.TG.SendMessage(msg.Chat.ID, h.I18n.Get("en", "access_denied"), "", nil)
+		return
+	}
+
+	lang := user.Language
+
+	if msg.Text == "/start" {
+		markup := map[string]interface{}{
+			"inline_keyboard": [][]map[string]interface{}{
+				{{"text": h.I18n.Get(lang, "btn_set_key"), "callback_data": "menu_key"}},
+				{{"text": h.I18n.Get(lang, "btn_dashboard"), "callback_data": "back_main"}},
+			},
+		}
+		h.TG.SendMessage(msg.Chat.ID, h.I18n.Get(lang, "welcome"), "", markup)
+		return
+	}
+
 	if msg.Text == "/settings" {
-		if user.LastDashboardID != 0 { h.TG.DeleteMessage(msg.Chat.ID, user.LastDashboardID) }
+		if user.LastDashboardID != 0 {
+			h.TG.DeleteMessage(msg.Chat.ID, user.LastDashboardID)
+		}
 		msgID, _ := h.TG.SendMessage(msg.Chat.ID, h.getDashboardText(user, ""), "", h.getDashboardMarkup(user))
 		user.LastDashboardID = msgID
 		h.DB.UpsertUser(*user)
 		return
 	}
 
+	// Logic input System Prompt
 	if strings.HasPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:") {
 		user.SystemPrompt = msg.Text
 		h.DB.UpsertUser(*user)
 		h.TG.DeleteMessage(msg.Chat.ID, msg.MessageID)
-		h.TG.EditMessage(msg.Chat.ID, user.LastDashboardID, h.getDashboardText(user, "✅ <b>Prompt updated successfully!</b>"), h.getDashboardMarkup(user))
+		h.refreshDashboard(msg.Chat.ID, user, "✅ <b>Prompt Updated!</b>")
 		return
 	}
 
-	if strings.HasPrefix(msg.Text, "gsk_") {
+	// Logic input Groq Key
+	if strings.HasPrefix(user.EncryptedGroqKey, "WAIT_FOR_KEY:") {
+		h.TG.DeleteMessage(msg.Chat.ID, msg.MessageID)
+		
+		if !strings.HasPrefix(msg.Text, "gsk_") {
+			user.EncryptedGroqKey = "" // Reset state
+			h.DB.UpsertUser(*user)
+			h.refreshDashboard(msg.Chat.ID, user, h.I18n.Get(lang, "key_invalid"))
+			return
+		}
+
 		enc, _ := encryption.Encrypt(msg.Text, h.EncryptKey)
 		user.EncryptedGroqKey = enc
 		h.DB.UpsertUser(*user)
-		h.TG.SendMessage(msg.Chat.ID, "✅ <b>API Key Saved!</b>", "", nil)
+		h.refreshDashboard(msg.Chat.ID, user, h.I18n.Get(lang, "key_success"))
+		return
 	}
 }
 
 func (h *BotHandler) handleBusinessMessage(msg *api.Message) {
 	owner, _ := h.DB.GetUserByBusinessConnID(msg.BusinessConnectionID)
-	if owner == nil || owner.EncryptedGroqKey == "" { return }
+	if owner == nil || owner.EncryptedGroqKey == "" || strings.HasPrefix(owner.EncryptedGroqKey, "WAIT_") {
+		return
+	}
 
-	realName := "Unknown"
+	displayName := "Customer"
 	if msg.From != nil {
-		if msg.From.FirstName != "" {
-			realName = msg.From.FirstName
-			if msg.From.LastName != "" { realName += " " + msg.From.LastName }
-		} else if msg.From.Username != "" {
-			realName = msg.From.Username
+		if msg.From.Username != "" {
+			displayName = "@" + msg.From.Username
+		} else if msg.From.FirstName != "" {
+			displayName = msg.From.FirstName
+			if msg.From.LastName != "" {
+				displayName += " " + msg.From.LastName
+			}
+		} else {
+			displayName = fmt.Sprintf("User %d", msg.From.ID)
 		}
 	}
 
-	h.DB.SaveMessage(owner.TelegramID, msg.Chat.ID, realName, "user", msg.Text)
+	h.DB.SaveMessage(owner.TelegramID, msg.Chat.ID, displayName, "user", msg.Text)
 	history := h.DB.GetChatHistory(owner.TelegramID, msg.Chat.ID)
 	
 	var final []models.ChatMessage
-	final = append(final, models.ChatMessage{Role: "system", Content: owner.SystemPrompt})
+	combinedPrompt := MasterHTMLPrompt + "\n\nBusiness Context: " + owner.SystemPrompt
+	final = append(final, models.ChatMessage{Role: "system", Content: combinedPrompt})
 	final = append(final, history...)
 
 	key, _ := encryption.Decrypt(owner.EncryptedGroqKey, h.EncryptKey)
 	groq := api.NewGroqClient(key)
 	resp, _ := groq.GetChatCompletion(owner.AIModel, final)
 
-	h.DB.SaveMessage(owner.TelegramID, msg.Chat.ID, realName, "assistant", resp)
+	h.DB.SaveMessage(owner.TelegramID, msg.Chat.ID, displayName, "assistant", resp)
 	h.TG.SendMessage(msg.Chat.ID, resp, msg.BusinessConnectionID, nil)
 }
 
@@ -105,86 +161,99 @@ func (h *BotHandler) handleCallbackQuery(cb *api.CallbackQuery) {
 	user, _ := h.DB.GetUser(cb.From.ID)
 	if user == nil { return }
 
+	// --- PERBAIKAN LOGIKA: Selalu gunakan ID pesan saat ini sebagai Dashboard ---
+	user.LastDashboardID = cb.Msg.MessageID
+	h.DB.UpsertUser(*user)
+
+	lang := user.Language
+	
 	if cb.Data == "menu_model" {
-		markup := map[string]interface{}{
-			"inline_keyboard": [][]map[string]interface{}{
-				{{"text": "GPT-OSS 120B", "callback_data": "set_model_openai/gpt-oss-120b"}},
-				{{"text": "Llama 4 Maverick", "callback_data": "set_model_meta-llama/llama-4-maverick-17b-128e-instruct"}},
-				{{"text": "« Back", "callback_data": "back_main"}},
-			},
-		}
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, "<b>Select AI Model:</b>", markup)
+		markup := map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": "GPT-OSS 120B", "callback_data": "set_model_openai/gpt-oss-120b"}}, {{"text": "Llama 4 Maverick", "callback_data": "set_model_meta-llama/llama-4-maverick-17b-128e-instruct"}}, {{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}}}}
+		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "select_model"), markup)
 	} else if strings.HasPrefix(cb.Data, "set_model_") {
 		user.AIModel = strings.TrimPrefix(cb.Data, "set_model_")
 		h.DB.UpsertUser(*user)
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.getDashboardText(user, "✅ <b>Model updated!</b>"), h.getDashboardMarkup(user))
+		h.refreshDashboard(cb.From.ID, user, "")
 	} else if cb.Data == "menu_prompt" {
-		oldPrompt := user.SystemPrompt
-		user.SystemPrompt = "WAIT_FOR_PROMPT:" + oldPrompt
+		user.SystemPrompt = "WAIT_FOR_PROMPT:"
 		h.DB.UpsertUser(*user)
-		markup := map[string]interface{}{
-			"inline_keyboard": [][]map[string]interface{}{
-				{{"text": "« Cancel", "callback_data": "cancel_prompt"}},
-			},
-		}
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, "📥 <b>Send a new System Prompt:</b>\n\n<i>Your next text message will be saved as the new AI instruction.</i>", markup)
-	} else if cb.Data == "cancel_prompt" {
-		if strings.HasPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:") {
-			user.SystemPrompt = strings.TrimPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:")
-			h.DB.UpsertUser(*user)
-		}
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.getDashboardText(user, ""), h.getDashboardMarkup(user))
+		markup := map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "back_main"}}}}
+		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "prompt_input"), markup)
+	} else if cb.Data == "menu_key" {
+		user.EncryptedGroqKey = "WAIT_FOR_KEY:"
+		h.DB.UpsertUser(*user)
+		markup := map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "back_main"}}}}
+		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "key_input"), markup)
 	} else if cb.Data == "menu_clear_list" {
 		customers := h.DB.GetBusinessCustomers(user.TelegramID)
 		var buttons [][]map[string]interface{}
 		if len(customers) == 0 {
-			h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, "❌ <b>No chat history found.</b>", map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": "« Back", "callback_data": "back_main"}}}})
+			h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "no_history"), map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}}}})
 			return
 		}
 		for _, c := range customers {
-			cid := int64(c["customer_id"].(float64))
+			var cid int64
+			if v, ok := c["customer_id"].(int64); ok { cid = v } else if v, ok := c["customer_id"].(float64); ok { cid = int64(v) }
 			name := c["customer_name"].(string)
 			buttons = append(buttons, []map[string]interface{}{{"text": "👤 " + name, "callback_data": fmt.Sprintf("confirm_clear_%d", cid)}})
 		}
-		buttons = append(buttons, []map[string]interface{}{{"text": "« Back", "callback_data": "back_main"}})
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, "<b>Select Customer to Clear History:</b>", map[string]interface{}{"inline_keyboard": buttons})
+		buttons = append(buttons, []map[string]interface{}{{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}})
+		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "clear_list"), map[string]interface{}{"inline_keyboard": buttons})
 	} else if strings.HasPrefix(cb.Data, "confirm_clear_") {
 		cid := strings.TrimPrefix(cb.Data, "confirm_clear_")
-		markup := map[string]interface{}{
-			"inline_keyboard": [][]map[string]interface{}{
-				{{"text": "⚠️ YES, DELETE", "callback_data": "exec_clear_" + cid}},
-				{{"text": "« Cancel", "callback_data": "menu_clear_list"}},
-			},
-		}
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, "<b>⚠️ WARNING</b>\nDelete history for this customer? This cannot be undone.", markup)
+		markup := map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_delete_confirm"), "callback_data": "exec_clear_" + cid}}, {{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "menu_clear_list"}}}}
+		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "clear_warn"), markup)
 	} else if strings.HasPrefix(cb.Data, "exec_clear_") {
 		cid := strings.TrimPrefix(cb.Data, "exec_clear_")
 		var targetID int64
 		fmt.Sscanf(cid, "%d", &targetID)
 		h.DB.ClearHistoryPerUser(user.TelegramID, targetID)
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, "✅ <b>History Cleared!</b>", map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": "« Back", "callback_data": "menu_clear_list"}}}})
+		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "history_cleared"), map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "menu_clear_list"}}}})
 	} else if cb.Data == "back_main" {
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.getDashboardText(user, ""), h.getDashboardMarkup(user))
+		// Reset state jika membatalkan input
+		if strings.HasPrefix(user.SystemPrompt, "WAIT_") { user.SystemPrompt = "Assistant." }
+		if strings.HasPrefix(user.EncryptedGroqKey, "WAIT_") { user.EncryptedGroqKey = "" }
+		h.DB.UpsertUser(*user)
+		h.refreshDashboard(cb.From.ID, user, "")
+	} else if cb.Data == "menu_lang" {
+		markup := map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": "English 🇺🇸", "callback_data": "set_lang_en"}, {"text": "Indonesia 🇮🇩", "callback_data": "set_lang_id"}}, {{"text": "Russian 🇷🇺", "callback_data": "set_lang_ru"}}, {{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}}}}
+		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, "<b>Select Language</b>", markup)
+	} else if strings.HasPrefix(cb.Data, "set_lang_") {
+		user.Language = strings.TrimPrefix(cb.Data, "set_lang_")
+		h.DB.UpsertUser(*user)
+		h.refreshDashboard(cb.From.ID, user, "")
 	}
 }
 
 func (h *BotHandler) getDashboardText(user *models.User, status string) string {
+	lang := user.Language
 	p := user.SystemPrompt
-	if strings.HasPrefix(p, "WAIT_FOR_PROMPT:") { p = strings.TrimPrefix(p, "WAIT_FOR_PROMPT:") }
-	p = strings.ReplaceAll(p, "<", "&lt;")
-	p = strings.ReplaceAll(p, ">", "&gt;")
+	if strings.HasPrefix(p, "WAIT_") { p = h.I18n.Get(lang, "wait_input") }
+	p = strings.ReplaceAll(strings.ReplaceAll(p, "<", "&lt;"), ">", "&gt;")
 	
-	header := "<b>🛠 DASHBOARD SETTINGS</b>"
-	if status != "" { header = status + "\n\n" + header }
+	keyStatus := h.I18n.Get(lang, "key_not_set")
+	if user.EncryptedGroqKey != "" && !strings.HasPrefix(user.EncryptedGroqKey, "WAIT_") { keyStatus = h.I18n.Get(lang, "key_set") }
 	
-	return fmt.Sprintf("%s\n\n<b>🤖 Model:</b>\n<code>%s</code>\n\n<b>📝 Prompt:</b>\n<code>%s</code>", header, user.AIModel, p)
+	header := h.I18n.Get(lang, "dash_title")
+	if status != "" { 
+		header = status + "\n\n" + header 
+	}
+
+	return fmt.Sprintf("%s\n\n%s <code>%s</code>\n%s <code>%s</code>\n%s <code>%s</code>", 
+		header, 
+		h.I18n.Get(lang, "dash_model"), user.AIModel, 
+		h.I18n.Get(lang, "dash_key"), keyStatus, 
+		h.I18n.Get(lang, "dash_prompt"), p)
 }
 
 func (h *BotHandler) getDashboardMarkup(user *models.User) map[string]interface{} {
+	lang := user.Language
 	return map[string]interface{}{
 		"inline_keyboard": [][]map[string]interface{}{
-			{{"text": "🤖 AI Model", "callback_data": "menu_model"}, {"text": "📝 Edit Prompt", "callback_data": "menu_prompt"}},
-			{{"text": "🧹 Clear Chat History", "callback_data": "menu_clear_list"}},
+			{{"text": h.I18n.Get(lang, "btn_model"), "callback_data": "menu_model"}, {"text": h.I18n.Get(lang, "btn_prompt"), "callback_data": "menu_prompt"}},
+			{{"text": h.I18n.Get(lang, "btn_update_key"), "callback_data": "menu_key"}},
+			{{"text": h.I18n.Get(lang, "btn_clear_history"), "callback_data": "menu_clear_list"}},
+			{{"text": "🌐 Language", "callback_data": "menu_lang"}},
 		},
 	}
 }

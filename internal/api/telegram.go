@@ -38,6 +38,7 @@ type User struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	Username  string `json:"username"`
+	IsPremium bool   `json:"is_premium"` // Menangkap field is_premium dari Telegram API
 }
 
 type Chat struct {
@@ -87,9 +88,15 @@ func (t *TelegramClient) SendMessage(chatID int64, text string, businessConnID s
 	}
 	jsonData, _ := json.Marshal(payload)
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil { return 0, err }
+	if err != nil {
+		return 0, err
+	}
 	defer resp.Body.Close()
-	var res struct { Result struct { MessageID int64 `json:"message_id"` } `json:"result"` }
+	var res struct {
+		Result struct {
+			MessageID int64 `json:"message_id"`
+		} `json:"result"`
+	}
 	json.NewDecoder(resp.Body).Decode(&res)
 	return res.Result.MessageID, nil
 }
