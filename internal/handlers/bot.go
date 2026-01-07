@@ -190,91 +190,65 @@ func (h *BotHandler) handleBusinessMessage(msg *api.Message) {
 }
 
 func (h *BotHandler) handleCallbackQuery(cb *api.CallbackQuery) {
-	h.TG.AnswerCallback(cb.ID)
-	user, _ := h.DB.GetUser(cb.From.ID)
-	if user == nil { return }
+    h.TG.AnswerCallback(cb.ID)
+    user, _ := h.DB.GetUser(cb.From.ID)
+    if user == nil {
+        return
+    }
 
-	// --- PERBAIKAN LOGIKA: Selalu gunakan ID pesan saat ini sebagai Dashboard ---
-	user.LastDashboardID = cb.Msg.MessageID
-	h.DB.UpsertUser(*user)
+    // Selalu sinkronkan ID pesan dashboard terbaru
+    user.LastDashboardID = cb.Msg.MessageID
+    h.DB.UpsertUser(*user)
 
-	lang := user.Language
-	
-	if cb.Data == "menu_model" {
-		markup := map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": "GPT-OSS 120B", "callback_data": "set_model_openai/gpt-oss-120b"}}, {{"text": "Llama 4 Maverick", "callback_data": "set_model_meta-llama/llama-4-maverick-17b-128e-instruct"}}, {{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}}}}
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "select_model"), markup)
-	} else if strings.HasPrefix(cb.Data, "set_model_") {
-		user.AIModel = strings.TrimPrefix(cb.Data, "set_model_")
-		h.DB.UpsertUser(*user)
-		h.refreshDashboard(cb.From.ID, user, "")
-		} else if cb.Data == "menu_prompt" {
-			// Simpan prompt lama di belakang flag agar tidak hilang
-			oldPrompt := user.SystemPrompt
-			user.SystemPrompt = "WAIT_FOR_PROMPT:" + oldPrompt 
-			h.DB.UpsertUser(*user)
-			
-			markup := map[string]interface{}{
-				"inline_keyboard": [][]map[string]interface{}{
-					{{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "back_main"}},
-				},
-			}
-			h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "prompt_input"), markup)
-	} else if cb.Data == "menu_key" {
-		user.EncryptedGroqKey = "WAIT_FOR_KEY:"
-		h.DB.UpsertUser(*user)
-		markup := map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "back_main"}}}}
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "key_input"), markup)
-	} else if cb.Data == "menu_clear_list" {
-		customers := h.DB.GetBusinessCustomers(user.TelegramID)
-		var buttons [][]map[string]interface{}
-		if len(customers) == 0 {
-			h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "no_history"), map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}}}})
-			return
-		}
-		for _, c := range customers {
-			var cid int64
-			if v, ok := c["customer_id"].(int64); ok { cid = v } else if v, ok := c["customer_id"].(float64); ok { cid = int64(v) }
-			name := c["customer_name"].(string)
-			buttons = append(buttons, []map[string]interface{}{{"text": "👤 " + name, "callback_data": fmt.Sprintf("confirm_clear_%d", cid)}})
-		}
-		buttons = append(buttons, []map[string]interface{}{{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}})
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "clear_list"), map[string]interface{}{"inline_keyboard": buttons})
-	} else if strings.HasPrefix(cb.Data, "confirm_clear_") {
-		cid := strings.TrimPrefix(cb.Data, "confirm_clear_")
-		markup := map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_delete_confirm"), "callback_data": "exec_clear_" + cid}}, {{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "menu_clear_list"}}}}
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "clear_warn"), markup)
-	} else if strings.HasPrefix(cb.Data, "exec_clear_") {
-		cid := strings.TrimPrefix(cb.Data, "exec_clear_")
-		var targetID int64
-		fmt.Sscanf(cid, "%d", &targetID)
-		h.DB.ClearHistoryPerUser(user.TelegramID, targetID)
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "history_cleared"), map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "menu_clear_list"}}}})
-		} else if cb.Data == "back_main" {
-			// CEK: Jika sedang dalam mode WAIT_FOR_PROMPT, kembalikan prompt aslinya
-			if strings.HasPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:") {
-				user.SystemPrompt = strings.TrimPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:")
-			}
-			
-			// CEK: Jika sedang dalam mode WAIT_FOR_KEY, bersihkan statusnya saja
-			if strings.HasPrefix(user.EncryptedGroqKey, "WAIT_FOR_KEY:") {
-				user.EncryptedGroqKey = "" 
-			}
-	
-			h.DB.UpsertUser(*user)
-			h.refreshDashboard(cb.From.ID, user, "")
-	} else if cb.Data == "menu_lang" {
-		markup := map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": "English 🇺🇸", "callback_data": "set_lang_en"}, {"text": "Indonesia 🇮🇩", "callback_data": "set_lang_id"}}, {{"text": "Russian 🇷🇺", "callback_data": "set_lang_ru"}}, {{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}}}}
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, "<b>Select Language</b>", markup)
-	} else if strings.HasPrefix(cb.Data, "set_lang_") {
-		user.Language = strings.TrimPrefix(cb.Data, "set_lang_")
-		h.DB.UpsertUser(*user)
-		h.refreshDashboard(cb.From.ID, user, "")
-	} else if cb.Data == "menu_location" {
-        // Simpan lokasi lama sebagai backup
-        oldLoc := user.BusinessLocation
-        user.BusinessLocation = "WAIT_FOR_LOCATION:" + oldLoc
+    lang := user.Language
+
+    if cb.Data == "menu_model" {
+        markup := map[string]interface{}{
+            "inline_keyboard": [][]map[string]interface{}{
+                {{"text": "GPT-OSS 120B", "callback_data": "set_model_openai/gpt-oss-120b"}},
+                {{"text": "Llama 4 Maverick", "callback_data": "set_model_meta-llama/llama-4-maverick-17b-128e-instruct"}},
+                {{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}},
+            },
+        }
+        h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "select_model"), markup)
+
+    } else if strings.HasPrefix(cb.Data, "set_model_") {
+        user.AIModel = strings.TrimPrefix(cb.Data, "set_model_")
         h.DB.UpsertUser(*user)
-        
+        h.refreshDashboard(cb.From.ID, user, "")
+
+    } else if cb.Data == "menu_prompt" {
+        // Backup prompt lama jika belum dalam mode WAIT
+        if !strings.HasPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:") {
+            user.SystemPrompt = "WAIT_FOR_PROMPT:" + user.SystemPrompt
+            h.DB.UpsertUser(*user)
+        }
+        markup := map[string]interface{}{
+            "inline_keyboard": [][]map[string]interface{}{
+                {{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "back_main"}},
+            },
+        }
+        h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "prompt_input"), markup)
+
+    } else if cb.Data == "menu_key" {
+        // PERBAIKAN: Backup key lama agar tidak hilang jika di-cancel
+        if !strings.HasPrefix(user.EncryptedGroqKey, "WAIT_FOR_KEY:") {
+            user.EncryptedGroqKey = "WAIT_FOR_KEY:" + user.EncryptedGroqKey
+            h.DB.UpsertUser(*user)
+        }
+        markup := map[string]interface{}{
+            "inline_keyboard": [][]map[string]interface{}{
+                {{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "back_main"}},
+            },
+        }
+        h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "key_input"), markup)
+
+    } else if cb.Data == "menu_location" {
+        // Backup lokasi lama jika belum dalam mode WAIT
+        if !strings.HasPrefix(user.BusinessLocation, "WAIT_FOR_LOCATION:") {
+            user.BusinessLocation = "WAIT_FOR_LOCATION:" + user.BusinessLocation
+            h.DB.UpsertUser(*user)
+        }
         markup := map[string]interface{}{
             "inline_keyboard": [][]map[string]interface{}{
                 {{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "back_main"}},
@@ -282,27 +256,79 @@ func (h *BotHandler) handleCallbackQuery(cb *api.CallbackQuery) {
         }
         h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "location_input"), markup)
 
-		} else if cb.Data == "back_main" {
-			// --- LOGIKA CLEANUP SEMUA STATE ---
-			if strings.HasPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:") {
-				user.SystemPrompt = strings.TrimPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:")
-			}
-			if strings.HasPrefix(user.EncryptedGroqKey, "WAIT_FOR_KEY:") {
-				user.EncryptedGroqKey = "" 
-			}
-			if strings.HasPrefix(user.BusinessLocation, "WAIT_FOR_LOCATION:") {
-				user.BusinessLocation = strings.TrimPrefix(user.BusinessLocation, "WAIT_FOR_LOCATION:")
-			}
-			h.DB.UpsertUser(*user)
-			h.refreshDashboard(cb.From.ID, user, "")
+    } else if cb.Data == "back_main" {
+        // LOGIKA CLEANUP: Mengembalikan semua data ke state asli (menghapus prefix WAIT)
+        if strings.HasPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:") {
+            user.SystemPrompt = strings.TrimPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:")
+        }
+        if strings.HasPrefix(user.EncryptedGroqKey, "WAIT_FOR_KEY:") {
+            user.EncryptedGroqKey = strings.TrimPrefix(user.EncryptedGroqKey, "WAIT_FOR_KEY:")
+        }
+        if strings.HasPrefix(user.BusinessLocation, "WAIT_FOR_LOCATION:") {
+            user.BusinessLocation = strings.TrimPrefix(user.BusinessLocation, "WAIT_FOR_LOCATION:")
+        }
 
-		}
-    	
+        h.DB.UpsertUser(*user)
+        h.refreshDashboard(cb.From.ID, user, "")
+
+    } else if cb.Data == "menu_lang" {
+        markup := map[string]interface{}{
+            "inline_keyboard": [][]map[string]interface{}{
+                {{"text": "English 🇺🇸", "callback_data": "set_lang_en"}, {"text": "Indonesia 🇮🇩", "callback_data": "set_lang_id"}},
+                {{"text": "Russian 🇷🇺", "callback_data": "set_lang_ru"}},
+                {{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}},
+            },
+        }
+        h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, "<b>Select Language</b>", markup)
+
+    } else if strings.HasPrefix(cb.Data, "set_lang_") {
+        user.Language = strings.TrimPrefix(cb.Data, "set_lang_")
+        h.DB.UpsertUser(*user)
+        h.refreshDashboard(cb.From.ID, user, "")
+
+    } else if cb.Data == "menu_clear_list" {
+        customers := h.DB.GetBusinessCustomers(user.TelegramID)
+        var buttons [][]map[string]interface{}
+        if len(customers) == 0 {
+            h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "no_history"), map[string]interface{}{
+                "inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}}},
+            })
+            return
+        }
+        for _, c := range customers {
+            var cid int64
+            if v, ok := c["customer_id"].(int64); ok {
+                cid = v
+            } else if v, ok := c["customer_id"].(float64); ok {
+                cid = int64(v)
+            }
+            name := c["customer_name"].(string)
+            buttons = append(buttons, []map[string]interface{}{{"text": "👤 " + name, "callback_data": fmt.Sprintf("confirm_clear_%d", cid)}})
+        }
+        buttons = append(buttons, []map[string]interface{}{{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}})
+        h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "clear_list"), map[string]interface{}{"inline_keyboard": buttons})
+
+    } else if strings.HasPrefix(cb.Data, "confirm_clear_") {
+        cid := strings.TrimPrefix(cb.Data, "confirm_clear_")
+        markup := map[string]interface{}{
+            "inline_keyboard": [][]map[string]interface{}{
+                {{"text": h.I18n.Get(lang, "btn_delete_confirm"), "callback_data": "exec_clear_" + cid}},
+                {{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "menu_clear_list"}},
+            },
+        }
+        h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "clear_warn"), markup)
+
+    } else if strings.HasPrefix(cb.Data, "exec_clear_") {
+        cid := strings.TrimPrefix(cb.Data, "exec_clear_")
+        var targetID int64
+        fmt.Sscanf(cid, "%d", &targetID)
+        h.DB.ClearHistoryPerUser(user.TelegramID, targetID)
+        h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "history_cleared"), map[string]interface{}{
+            "inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "menu_clear_list"}}},
+        })
+    }
 }
 
-// --- UPDATED FUNCTION ---
-// --- UPDATED FUNCTION ---
-// --- UPDATED FUNCTION ---
 func (h *BotHandler) getDashboardText(user *models.User, status string) string {
 	lang := user.Language
 
