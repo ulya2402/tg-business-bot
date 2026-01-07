@@ -93,6 +93,20 @@ func (h *BotHandler) handlePrivateMessage(msg *api.Message) {
 		return
 	}
 
+	if strings.HasPrefix(user.BusinessLocation, "WAIT_FOR_LOCATION:") {
+		h.TG.DeleteMessage(msg.Chat.ID, msg.MessageID)
+		
+		if msg.Location != nil {
+			// Simpan Koordinat Asli
+			user.Latitude = msg.Location.Latitude
+			user.Longitude = msg.Location.Longitude
+			user.BusinessLocation = fmt.Sprintf("https://www.google.com/maps?q=%f,%f", msg.Location.Latitude, msg.Location.Longitude)
+			
+			h.DB.UpsertUser(*user)
+			h.refreshDashboard(msg.Chat.ID, user, h.I18n.Get(user.Language, "location_success"))
+			return
+		}
+
 	// Logic input System Prompt
 	if strings.HasPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:") {
 		user.SystemPrompt = msg.Text
@@ -120,9 +134,13 @@ func (h *BotHandler) handlePrivateMessage(msg *api.Message) {
 		return
 	}
 }
+}
 
+// --- UPDATED FUNCTION ---
+// --- UPDATED FUNCTION ---
 func (h *BotHandler) handleBusinessMessage(msg *api.Message) {
 	owner, _ := h.DB.GetUserByBusinessConnID(msg.BusinessConnectionID)
+	// Guard clause: pastikan owner valid dan tidak sedang input key/prompt
 	if owner == nil || owner.EncryptedGroqKey == "" || strings.HasPrefix(owner.EncryptedGroqKey, "WAIT_") {
 		return
 	}
@@ -133,15 +151,19 @@ func (h *BotHandler) handleBusinessMessage(msg *api.Message) {
 			displayName = "@" + msg.From.Username
 		} else if msg.From.FirstName != "" {
 			displayName = msg.From.FirstName
-			if msg.From.LastName != "" { displayName += " " + msg.From.LastName }
+			if msg.From.LastName != "" {
+				displayName += " " + msg.From.LastName
+			}
 		} else {
 			displayName = fmt.Sprintf("User %d", msg.From.ID)
 		}
 	}
 
+	// Simpan pesan user ke history
 	h.DB.SaveMessage(owner.TelegramID, msg.Chat.ID, displayName, "user", msg.Text)
 	history := h.DB.GetChatHistory(owner.TelegramID, msg.Chat.ID)
 	
+	// Olah placeholder (termasuk lokasi bisnis)
 	dynamicPrompt := h.processPlaceholders(owner.SystemPrompt, owner, msg)
 
 	var final []models.ChatMessage
@@ -153,8 +175,21 @@ func (h *BotHandler) handleBusinessMessage(msg *api.Message) {
 	groq := api.NewGroqClient(key)
 	resp, _ := groq.GetChatCompletion(owner.AIModel, final)
 
+	// 1. Simpan dan kirim balasan teks dari AI
 	h.DB.SaveMessage(owner.TelegramID, msg.Chat.ID, displayName, "assistant", resp)
 	h.TG.SendMessage(msg.Chat.ID, resp, msg.BusinessConnectionID, nil)
+
+	// 2. Logika Kirim Sharelok Otomatis
+	if owner.Latitude != 0 && owner.Longitude != 0 {
+		// Deteksi jika AI menyebutkan link maps atau teks lokasi yang diset
+		isMentioningLoc := strings.Contains(resp, "maps.google.com") || 
+						  strings.Contains(resp, owner.BusinessLocation)
+
+		if isMentioningLoc {
+			// Kirim pin lokasi asli Telegram
+			h.TG.SendLocation(msg.Chat.ID, owner.Latitude, owner.Longitude, msg.BusinessConnectionID)
+		}
+	}
 }
 
 func (h *BotHandler) handleCallbackQuery(cb *api.CallbackQuery) {
@@ -237,46 +272,89 @@ func (h *BotHandler) handleCallbackQuery(cb *api.CallbackQuery) {
 		user.Language = strings.TrimPrefix(cb.Data, "set_lang_")
 		h.DB.UpsertUser(*user)
 		h.refreshDashboard(cb.From.ID, user, "")
-	}
+	} else if cb.Data == "menu_location" {
+        // Simpan lokasi lama sebagai backup
+        oldLoc := user.BusinessLocation
+        user.BusinessLocation = "WAIT_FOR_LOCATION:" + oldLoc
+        h.DB.UpsertUser(*user)
+        
+        markup := map[string]interface{}{
+            "inline_keyboard": [][]map[string]interface{}{
+                {{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "back_main"}},
+            },
+        }
+        h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "location_input"), markup)
+
+		} else if cb.Data == "back_main" {
+			// --- LOGIKA CLEANUP SEMUA STATE ---
+			if strings.HasPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:") {
+				user.SystemPrompt = strings.TrimPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:")
+			}
+			if strings.HasPrefix(user.EncryptedGroqKey, "WAIT_FOR_KEY:") {
+				user.EncryptedGroqKey = "" 
+			}
+			if strings.HasPrefix(user.BusinessLocation, "WAIT_FOR_LOCATION:") {
+				user.BusinessLocation = strings.TrimPrefix(user.BusinessLocation, "WAIT_FOR_LOCATION:")
+			}
+			h.DB.UpsertUser(*user)
+			h.refreshDashboard(cb.From.ID, user, "")
+
+		}
+    	
 }
 
 // --- UPDATED FUNCTION ---
+// --- UPDATED FUNCTION ---
+// --- UPDATED FUNCTION ---
 func (h *BotHandler) getDashboardText(user *models.User, status string) string {
-    lang := user.Language
-    p := user.SystemPrompt
-    
-    // Jika sedang menunggu input, tampilkan teks bantuan, bukan isi flag
-    if strings.HasPrefix(p, "WAIT_FOR_PROMPT:") { 
-        p = h.I18n.Get(lang, "wait_input") 
-    }
-    
-    // Escape HTML khusus untuk tampilan UI Dashboard
-    p = strings.ReplaceAll(strings.ReplaceAll(p, "<", "&lt;"), ">", "&gt;")
-    
-    keyStatus := h.I18n.Get(lang, "key_not_set")
-    if user.EncryptedGroqKey != "" && !strings.HasPrefix(user.EncryptedGroqKey, "WAIT_") { 
-        keyStatus = h.I18n.Get(lang, "key_set") 
-    }
-    
-    header := h.I18n.Get(lang, "dash_title")
-    if status != "" { header = status + "\n\n" + header }
-    
-    return fmt.Sprintf("%s\n\n%s <code>%s</code>\n%s <code>%s</code>\n%s\n<pre>%s</pre>", 
-        header, 
-        h.I18n.Get(lang, "dash_model"), user.AIModel, 
-        h.I18n.Get(lang, "dash_key"), keyStatus, 
-        h.I18n.Get(lang, "dash_prompt"), 
-        p)
+	lang := user.Language
+
+	// Tampilan Lokasi
+	locDisplay := user.BusinessLocation
+	if strings.HasPrefix(locDisplay, "WAIT_FOR_LOCATION:") {
+		locDisplay = h.I18n.Get(lang, "wait_input")
+	}
+	if locDisplay == "" { locDisplay = "<i>Not set</i>" }
+
+	// Tampilan Prompt
+	p := user.SystemPrompt
+	if strings.HasPrefix(p, "WAIT_FOR_PROMPT:") { p = h.I18n.Get(lang, "wait_input") }
+	p = strings.ReplaceAll(strings.ReplaceAll(p, "<", "&lt;"), ">", "&gt;")
+	
+	keyStatus := h.I18n.Get(lang, "key_not_set")
+	if user.EncryptedGroqKey != "" && !strings.HasPrefix(user.EncryptedGroqKey, "WAIT_") { keyStatus = h.I18n.Get(lang, "key_set") }
+	
+	header := h.I18n.Get(lang, "dash_title")
+	if status != "" { header = status + "\n\n" + header }
+	
+	// Pastikan ada 9 parameter %s yang sesuai
+	return fmt.Sprintf("%s\n\n%s <code>%s</code>\n%s <code>%s</code>\n%s <code>%s</code>\n%s\n<pre>%s</pre>", 
+		header,                                  // 1
+		h.I18n.Get(lang, "dash_model"), user.AIModel, // 2, 3
+		h.I18n.Get(lang, "dash_key"), keyStatus,      // 4, 5
+		h.I18n.Get(lang, "dash_location"), locDisplay, // 6, 7
+		h.I18n.Get(lang, "dash_prompt"), p,            // 8, 9
+	)
 }
 
 func (h *BotHandler) getDashboardMarkup(user *models.User) map[string]interface{} {
 	lang := user.Language
 	return map[string]interface{}{
 		"inline_keyboard": [][]map[string]interface{}{
-			{{"text": h.I18n.Get(lang, "btn_model"), "callback_data": "menu_model"}, {"text": h.I18n.Get(lang, "btn_prompt"), "callback_data": "menu_prompt"}},
-			{{"text": h.I18n.Get(lang, "btn_update_key"), "callback_data": "menu_key"}},
-			{{"text": h.I18n.Get(lang, "btn_clear_history"), "callback_data": "menu_clear_list"}},
-			{{"text": "🌐 Language", "callback_data": "menu_lang"}},
+			{
+				{"text": h.I18n.Get(lang, "btn_model"), "callback_data": "menu_model"},
+				{"text": h.I18n.Get(lang, "btn_prompt"), "callback_data": "menu_prompt"},
+			},
+			{
+				{"text": h.I18n.Get(lang, "btn_set_location"), "callback_data": "menu_location"},
+			},
+			{
+				{"text": h.I18n.Get(lang, "btn_update_key"), "callback_data": "menu_key"},
+				{"text": h.I18n.Get(lang, "btn_clear_history"), "callback_data": "menu_clear_list"},
+			},
+			{
+				{"text": "🌐 Language", "callback_data": "menu_lang"},
+			},
 		},
 	}
 }
@@ -309,6 +387,7 @@ func (h *BotHandler) processPlaceholders(prompt string, owner *models.User, msg 
 		"{{current_time}}", now.Format("15:04"),
 		"{{current_date}}", now.Format("02 January 2006"),
 		"{{current_day}}", now.Weekday().String(),
+		"{{business_location}}", owner.BusinessLocation, // <-- TAMBAHKAN INI
 	)
 
 	return replacer.Replace(prompt)

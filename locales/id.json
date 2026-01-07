@@ -16,7 +16,8 @@
     "btn_clear_history": "🧹 Hapus Riwayat",
     "btn_back": "« Kembali",
     "btn_cancel": "« Batal",
-"prompt_input": "📥 <b>Kirim System Prompt baru:</b>\n\nAnda bisa menggunakan placeholder berikut:\n- <code>{{customer_name}}</code>: Nama pelanggan\n- <code>{{customer_username}}</code>: Username (@)\n- <code>{{current_time}}</code>: Jam sekarang\n- <code>{{current_date}}</code>: Tanggal hari ini\n- <code>{{current_day}}</code>: Hari ini",    "key_input": "📥 <b>Kirim Groq API Key baru:</b>",
+"prompt_input": "📥 <b>Kirim System Prompt baru:</b>\n\nAnda bisa menggunakan placeholder berikut:\n- <code>{{customer_name}}</code>: Nama pelanggan\n- <code>{{customer_username}}</code>: Username (@)\n- <code>{{current_time}}</code>: Jam sekarang\n- <code>{{current_date}}</code>: Tanggal hari ini\n- <code>{{current_day}}</code>: Hari ini\n - <code>{{business_location}}</code> : Lokasi Bisnis",    
+"key_input": "📥 <b>Kirim Groq API Key baru:</b>",
     "select_model": "<b>Pilih Model AI:</b>",
     "clear_list": "<b>Pilih Pelanggan untuk Hapus Riwayat:</b>",
     "clear_warn": "<b>⚠️ PERINGATAN</b>\nHapus riwayat? Tindakan ini permanen.",
@@ -24,5 +25,10 @@
     "history_cleared": "✅ <b>Riwayat Terhapus!</b>",
     "no_history": "❌ <b>Tidak ada riwayat chat.</b>",
     "key_invalid": "❌ <b>Format Salah!</b> Groq Key harus diawali dengan <code>gsk_</code>",
-"key_success": "✅ <b>Groq Key berhasil diperbarui!</b>"
+"key_success": "✅ <b>Groq Key berhasil diperbarui!</b>",
+
+"btn_set_location": "📍 Set Lokasi",
+"dash_location": "<b>📍 Lokasi:</b>",
+"location_input": "📥 <b>Kirim Alamat Bisnis Anda:</b>\n\nAnda bisa mengetik alamat lengkap atau link Google Maps.",
+"location_success": "✅ <b>Lokasi bisnis berhasil diperbarui!</b>"
 }

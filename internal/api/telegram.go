@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"fmt"
 )
 
 type TelegramClient struct {
@@ -31,6 +32,12 @@ type Message struct {
 	Chat                 *Chat  `json:"chat"`
 	Text                 string `json:"text"`
 	BusinessConnectionID string `json:"business_connection_id"`
+	Location             *Location `json:"location"` // <-- TAMBAHKAN INI
+}
+
+type Location struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
 }
 
 type User struct {
@@ -112,4 +119,19 @@ func (t *TelegramClient) EditMessage(chatID int64, messageID int64, text string,
 	}
 	jsonData, _ := json.Marshal(payload)
 	http.Post(url, "application/json", bytes.NewBuffer(jsonData))
+}
+
+func (c *TelegramClient) SendLocation(chatID int64, lat, lon float64, businessConnID string) {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendLocation", c.Token)
+	payload := map[string]interface{}{
+		"chat_id":    chatID,
+		"latitude":   lat,
+		"longitude":  lon,
+	}
+	if businessConnID != "" {
+		payload["business_connection_id"] = businessConnID
+	}
+	
+	body, _ := json.Marshal(payload)
+	http.Post(url, "application/json", bytes.NewBuffer(body))
 }
