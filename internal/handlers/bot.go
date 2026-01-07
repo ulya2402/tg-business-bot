@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"time"
 	"strings"
 	"tg-business-bot/internal/api"
 	"tg-business-bot/internal/database"
@@ -132,9 +133,7 @@ func (h *BotHandler) handleBusinessMessage(msg *api.Message) {
 			displayName = "@" + msg.From.Username
 		} else if msg.From.FirstName != "" {
 			displayName = msg.From.FirstName
-			if msg.From.LastName != "" {
-				displayName += " " + msg.From.LastName
-			}
+			if msg.From.LastName != "" { displayName += " " + msg.From.LastName }
 		} else {
 			displayName = fmt.Sprintf("User %d", msg.From.ID)
 		}
@@ -143,8 +142,10 @@ func (h *BotHandler) handleBusinessMessage(msg *api.Message) {
 	h.DB.SaveMessage(owner.TelegramID, msg.Chat.ID, displayName, "user", msg.Text)
 	history := h.DB.GetChatHistory(owner.TelegramID, msg.Chat.ID)
 	
+	dynamicPrompt := h.processPlaceholders(owner.SystemPrompt, owner, msg)
+
 	var final []models.ChatMessage
-	combinedPrompt := MasterHTMLPrompt + "\n\nBusiness Context: " + owner.SystemPrompt
+	combinedPrompt := MasterHTMLPrompt + "\n\nBusiness Context: " + dynamicPrompt
 	final = append(final, models.ChatMessage{Role: "system", Content: combinedPrompt})
 	final = append(final, history...)
 
@@ -174,11 +175,18 @@ func (h *BotHandler) handleCallbackQuery(cb *api.CallbackQuery) {
 		user.AIModel = strings.TrimPrefix(cb.Data, "set_model_")
 		h.DB.UpsertUser(*user)
 		h.refreshDashboard(cb.From.ID, user, "")
-	} else if cb.Data == "menu_prompt" {
-		user.SystemPrompt = "WAIT_FOR_PROMPT:"
-		h.DB.UpsertUser(*user)
-		markup := map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "back_main"}}}}
-		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "prompt_input"), markup)
+		} else if cb.Data == "menu_prompt" {
+			// Simpan prompt lama di belakang flag agar tidak hilang
+			oldPrompt := user.SystemPrompt
+			user.SystemPrompt = "WAIT_FOR_PROMPT:" + oldPrompt 
+			h.DB.UpsertUser(*user)
+			
+			markup := map[string]interface{}{
+				"inline_keyboard": [][]map[string]interface{}{
+					{{"text": h.I18n.Get(lang, "btn_cancel"), "callback_data": "back_main"}},
+				},
+			}
+			h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "prompt_input"), markup)
 	} else if cb.Data == "menu_key" {
 		user.EncryptedGroqKey = "WAIT_FOR_KEY:"
 		h.DB.UpsertUser(*user)
@@ -209,12 +217,19 @@ func (h *BotHandler) handleCallbackQuery(cb *api.CallbackQuery) {
 		fmt.Sscanf(cid, "%d", &targetID)
 		h.DB.ClearHistoryPerUser(user.TelegramID, targetID)
 		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, h.I18n.Get(lang, "history_cleared"), map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "menu_clear_list"}}}})
-	} else if cb.Data == "back_main" {
-		// Reset state jika membatalkan input
-		if strings.HasPrefix(user.SystemPrompt, "WAIT_") { user.SystemPrompt = "Assistant." }
-		if strings.HasPrefix(user.EncryptedGroqKey, "WAIT_") { user.EncryptedGroqKey = "" }
-		h.DB.UpsertUser(*user)
-		h.refreshDashboard(cb.From.ID, user, "")
+		} else if cb.Data == "back_main" {
+			// CEK: Jika sedang dalam mode WAIT_FOR_PROMPT, kembalikan prompt aslinya
+			if strings.HasPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:") {
+				user.SystemPrompt = strings.TrimPrefix(user.SystemPrompt, "WAIT_FOR_PROMPT:")
+			}
+			
+			// CEK: Jika sedang dalam mode WAIT_FOR_KEY, bersihkan statusnya saja
+			if strings.HasPrefix(user.EncryptedGroqKey, "WAIT_FOR_KEY:") {
+				user.EncryptedGroqKey = "" 
+			}
+	
+			h.DB.UpsertUser(*user)
+			h.refreshDashboard(cb.From.ID, user, "")
 	} else if cb.Data == "menu_lang" {
 		markup := map[string]interface{}{"inline_keyboard": [][]map[string]interface{}{{{"text": "English 🇺🇸", "callback_data": "set_lang_en"}, {"text": "Indonesia 🇮🇩", "callback_data": "set_lang_id"}}, {{"text": "Russian 🇷🇺", "callback_data": "set_lang_ru"}}, {{"text": h.I18n.Get(lang, "btn_back"), "callback_data": "back_main"}}}}
 		h.TG.EditMessage(cb.From.ID, cb.Msg.MessageID, "<b>Select Language</b>", markup)
@@ -225,25 +240,33 @@ func (h *BotHandler) handleCallbackQuery(cb *api.CallbackQuery) {
 	}
 }
 
+// --- UPDATED FUNCTION ---
 func (h *BotHandler) getDashboardText(user *models.User, status string) string {
-	lang := user.Language
-	p := user.SystemPrompt
-	if strings.HasPrefix(p, "WAIT_") { p = h.I18n.Get(lang, "wait_input") }
-	p = strings.ReplaceAll(strings.ReplaceAll(p, "<", "&lt;"), ">", "&gt;")
-	
-	keyStatus := h.I18n.Get(lang, "key_not_set")
-	if user.EncryptedGroqKey != "" && !strings.HasPrefix(user.EncryptedGroqKey, "WAIT_") { keyStatus = h.I18n.Get(lang, "key_set") }
-	
-	header := h.I18n.Get(lang, "dash_title")
-	if status != "" { 
-		header = status + "\n\n" + header 
-	}
-
-	return fmt.Sprintf("%s\n\n%s <code>%s</code>\n%s <code>%s</code>\n%s <code>%s</code>", 
-		header, 
-		h.I18n.Get(lang, "dash_model"), user.AIModel, 
-		h.I18n.Get(lang, "dash_key"), keyStatus, 
-		h.I18n.Get(lang, "dash_prompt"), p)
+    lang := user.Language
+    p := user.SystemPrompt
+    
+    // Jika sedang menunggu input, tampilkan teks bantuan, bukan isi flag
+    if strings.HasPrefix(p, "WAIT_FOR_PROMPT:") { 
+        p = h.I18n.Get(lang, "wait_input") 
+    }
+    
+    // Escape HTML khusus untuk tampilan UI Dashboard
+    p = strings.ReplaceAll(strings.ReplaceAll(p, "<", "&lt;"), ">", "&gt;")
+    
+    keyStatus := h.I18n.Get(lang, "key_not_set")
+    if user.EncryptedGroqKey != "" && !strings.HasPrefix(user.EncryptedGroqKey, "WAIT_") { 
+        keyStatus = h.I18n.Get(lang, "key_set") 
+    }
+    
+    header := h.I18n.Get(lang, "dash_title")
+    if status != "" { header = status + "\n\n" + header }
+    
+    return fmt.Sprintf("%s\n\n%s <code>%s</code>\n%s <code>%s</code>\n%s\n<pre>%s</pre>", 
+        header, 
+        h.I18n.Get(lang, "dash_model"), user.AIModel, 
+        h.I18n.Get(lang, "dash_key"), keyStatus, 
+        h.I18n.Get(lang, "dash_prompt"), 
+        p)
 }
 
 func (h *BotHandler) getDashboardMarkup(user *models.User) map[string]interface{} {
@@ -264,4 +287,29 @@ func (h *BotHandler) handleBusinessConnection(conn *api.BusinessConnection) {
 		user.BusinessConnID = conn.ID
 		h.DB.UpsertUser(*user)
 	}
+}
+
+// --- NEW HELPER FUNCTION ---
+// processPlaceholders mengganti tag dinamis dalam prompt dengan data real-time.
+func (h *BotHandler) processPlaceholders(prompt string, owner *models.User, msg *api.Message) string {
+	now := time.Now()
+	
+	// Data Pelanggan
+	customerName := msg.From.FirstName
+	if msg.From.LastName != "" { customerName += " " + msg.From.LastName }
+	customerUsername := "@" + msg.From.Username
+	if msg.From.Username == "" { customerUsername = "n/a" }
+
+	// Mapping Placeholder
+	replacer := strings.NewReplacer(
+		"{{customer_name}}", customerName,
+		"{{customer_username}}", customerUsername,
+		"{{customer_id}}", fmt.Sprintf("%d", msg.From.ID),
+		"{{owner_name}}", "Owner", // Bisa diambil dari data owner jika tersedia
+		"{{current_time}}", now.Format("15:04"),
+		"{{current_date}}", now.Format("02 January 2006"),
+		"{{current_day}}", now.Weekday().String(),
+	)
+
+	return replacer.Replace(prompt)
 }
