@@ -1,5 +1,5 @@
 {
-    "access_denied": "⚠️ <b>Access Denied</b>\n\nThis bot is strictly for <b>Telegram Premium</b> users.",
+    "access_denied": "☒ <b>Access Denied</b>\n\nThis bot is strictly for <b>Telegram Premium</b> users.",
     "welcome": "👋 <b>Welcome!</b>\n\nThis bot manages your Business Account using AI. Please configure your settings below:",
     "btn_set_key": "🔑 Set Groq Key",
     "btn_dashboard": "🛠 Open Dashboard",
